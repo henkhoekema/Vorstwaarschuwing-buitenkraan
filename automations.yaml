@@ -1,26 +1,3 @@
-   - binary_sensor:
-      - name: "Vorst risico"
-        unique_id: vorst_risico
-
-      # normale waarde → werkt zoals verwacht
-      # fout / unavailable → wordt 99
-      # dus → GEEN valse vorstmelding
-        state: >
-          {{ states('sensor.temperatuur') | float(99) < 8 }}         # Temperatuur lager als 8 graden?
-
-      # tegen flapperen
-        delay_on:
-          minutes: 5
-
-        delay_off:
-          minutes: 30
-
-
-# Helpers
-# input_boolean:
-#   input_boolean.water_afgesloten
-
-
 # Vorst automation 
   - id: 'vorst_waarschuwing'
     alias: Vorst waarschuwing (kraan afsluiten)
@@ -56,10 +33,6 @@
         before: "23:00:00"
     actions:
       - action: notify.mobile_app_<your_id_here>
-        # Temperatuur 	Melding                    Welke regel
-        # 7°C	            🟡 gewone waarschuwing     else
-        # 4°C               🟠 serieuze waarschuwing   elif t <= 5
-        # 2°C	            🔴 alarmniveau             if t <= 3
         data:
           title: "🥶 Vorst waarschuwing"
           message: >
@@ -109,10 +82,6 @@
             #   - enzovoort zolang de while: voorwaarden waar zijn
             - delay: "04:00:00"
             - action: notify.mobile_app_<your_id_here>
-                # Temperatuur	    Melding                    Welke regel
-                # 4°C	            🟡 gewone waarschuwing     else
-                # 1°C       	    🟠 serieuze waarschuwing   elif t <= 5
-                # -2°C  	    🔴 alarmniveau             if t <= 3
               data:
                 title: "🥶 Vorst reminder"
                 message: >
@@ -308,40 +277,6 @@
       stored_traces: 10
     mode: restart
 
-
- Resultaat:
-   Vorst: dan melding en repeat
-   JA: dan stopt alles
-   NEE: dan waarschuwing
-   later: dan reminder
-   1 april: Kraan is open herinnering en repeat
-   JA: dan reset systeem
-
-
- Realistische uitkomst op 5 april
-   Als je op 1 april: kraan weer open hebt gezet dan staat de helper = OFF
- 
-   Als het op 5 april weer vriest: de automation zet de helper weer op ON
-   jij bevestigt het en de helper blijft ON
-
- Kortom
-   Het systeem herstelt zichzelf automatisch bij nieuwe vorst, ook na 1 april.
-
- Maar wat gebeurt als HA herstart midden in de repeat?
-   De repeat stopt volledig
-
- Waarom:
-   Automations onthouden geen “lopende loops”
-   repeat + delay worden niet hervat na restart
-
- Gevolg:
- Na herstart:
-   vorst = nog steeds on
-   helper = nog steeds on
-   maar: geen nieuwe notificaties meer
- totdat de:
-   temperatuur eerst weer boven de drempel gaat (off)
-   en daarna weer onder (on)
 
 ################################################################################
 
