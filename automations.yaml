@@ -1,0 +1,352 @@
+   - binary_sensor:
+      - name: "Vorst risico"
+        unique_id: vorst_risico
+
+      # normale waarde → werkt zoals verwacht
+      # fout / unavailable → wordt 99
+      # dus → GEEN valse vorstmelding
+        state: >
+          {{ states('sensor.temperatuur') | float(99) < 8 }}         # Temperatuur lager als 8 graden?
+
+      # tegen flapperen
+        delay_on:
+          minutes: 5
+
+        delay_off:
+          minutes: 30
+
+
+# Helpers
+# input_boolean:
+#   input_boolean.water_afgesloten
+
+
+# Vorst automation 
+  - id: 'vorst_waarschuwing'
+    alias: Vorst waarschuwing (kraan afsluiten)
+    description: >
+      Automatische vorstbeveiliging voor de buitenkraan.
+      Stuurt meldingen op basis van temperatuur,
+      hervat correct na Home Assistant herstart
+      en blijft herinneren totdat de kraan afgesloten bevestigd is.
+    triggers:
+      # De temperatuur is onder de ingestelde temperatuur gekomen. (zie template)
+      - trigger: state
+        entity_id: binary_sensor.vorst_risico
+        from: "off"
+        to: "on"
+      # Herstart Home Assistant
+      - trigger: homeassistant
+        event: start
+    conditions:
+      # Alleen uitvoeren als er echt vorst is
+      - condition: state
+        entity_id: binary_sensor.vorst_risico
+        state: "on"
+      # En alleen als kraan nog niet “klaar” is
+      - condition: state
+        entity_id: input_boolean.water_afgesloten
+        state: "on"
+      # En bovendien alleen uitvoeren tussen oktober en april
+      - condition: template 
+        value_template: '{{ now().month >= 10 or now().month <= 4 }}'
+      # Voorkom meldingen tijdens de nacht/slaapuren
+      - condition: time
+        after: "07:00:00"
+        before: "23:00:00"
+    actions:
+      - action: notify.mobile_app_<your_id_here>
+        # Temperatuur 	Melding                    Welke regel
+        # 7°C	            🟡 gewone waarschuwing     else
+        # 4°C               🟠 serieuze waarschuwing   elif t <= 5
+        # 2°C	            🔴 alarmniveau             if t <= 3
+        data:
+          title: "🥶 Vorst waarschuwing"
+          message: >
+            {% set t = states('sensor.temperatuur') | float %}
+
+            {% if t <= 3 %}
+              🔴 Ernstige vorst verwacht ({{ t }}°C)!
+              Sluit DIRECT de buitenkraan af!
+            {% elif t <= 5 %}
+              🟠 Grote kans op vorst ({{ t }}°C).
+              Controleer of de buitenkraan afgesloten is.
+            {% else %}
+              🟡 Kans op vriezen ({{ t }}°C).
+              Heb je de buitenkraan dichtgedraaid?
+            {% endif %}
+          data:
+            ttl: 0
+            priority: high
+            clickAction: "noAction"
+            tag: vorst_kraan
+            actions:
+              - action: KRAAN_JA
+                title: "JA"
+              - action: KRAAN_NEE
+                title: "NEE"
+              - action: KRAAN_LATER
+                title: "Herinner me later"
+      - repeat:
+          while:
+            - condition: state
+              entity_id: binary_sensor.vorst_risico
+              state: "on"
+            - condition: state
+              entity_id: input_boolean.water_afgesloten
+              state: "on"
+            # Voorkom meldingen tijdens de nacht/slaapuren
+            - condition: time
+              after: "07:00:00"
+              before: "23:00:00"
+          sequence:
+            # wacht 4 uur voordat de volgende stap uitgevoerd wordt.
+            #   - automation start
+            #   - eerste notificatie wordt direct gestuurd
+            #   - daarna wacht Home Assistant 4 uur
+            #   - vervolgens wordt opnieuw een reminder gestuurd
+            #   - daarna weer 4 uur wachten
+            #   - enzovoort zolang de while: voorwaarden waar zijn
+            - delay: "04:00:00"
+            - action: notify.mobile_app_<your_id_here>
+                # Temperatuur	    Melding                    Welke regel
+                # 4°C	            🟡 gewone waarschuwing     else
+                # 1°C       	    🟠 serieuze waarschuwing   elif t <= 5
+                # -2°C  	    🔴 alarmniveau             if t <= 3
+              data:
+                title: "🥶 Vorst reminder"
+                message: >
+                  {% set t = states('sensor.temperatuur') | float %}
+
+                  {% if t <= 3 %}
+                    🔴 Ernstige vorst actief ({{ t }}°C)!
+                    Controleer direct de buitenkraan!
+                  {% elif t <= 5 %}
+                    🟠 Vorst reminder ({{ t }}°C).
+                    Controleer of de buitenkraan afgesloten is.
+                  {% else %}
+                    🟡 Reminder: sluit de buitenkraan af.
+                  {% endif %}
+                data:
+                  ttl: 0
+                  priority: high
+                  clickAction: "noAction"
+                  tag: vorst_kraan
+                  actions:
+                    - action: KRAAN_JA
+                      title: "JA"
+                    - action: KRAAN_LATER
+                      title: "Herinner me later"
+    trace:
+      stored_traces: 10
+    mode: restart
+
+
+# Kraan dicht (JA)
+  - id: 'kraan_bevestigd_dicht'
+    alias: Kraan bevestigd dicht
+    triggers:
+      - trigger: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: KRAAN_JA
+    actions:
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.water_afgesloten
+      - action: notify.mobile_app_<your_id_here>
+        data:
+          message: "👍 Top! Buitenkraan is als afgesloten gemarkeerd."
+          data:
+            ttl: 0
+            priority: high
+            clickAction: "noAction"
+            tag: vorst_kraan
+    trace:
+      stored_traces: 10
+    mode: restart
+
+
+# Kraan dicht NEE
+  - id: 'kraan_nog_open_waarschuwing'
+    alias: Kraan nog open waarschuwing
+    triggers:
+      - trigger: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: KRAAN_NEE
+    action:
+      - action: notify.mobile_app_<your_id_here>
+        data:
+          message: "⚠️ Sluit de buitenkraan zo snel mogelijk af!"
+          data:
+            ttl: 0
+            priority: high
+            clickAction: "noAction"
+            tag: vorst_kraan
+    trace:
+      stored_traces: 10
+    mode: restart
+
+
+# Herinner later
+  - id: 'kraan_later_herinnering'
+    alias: Kraan later herinnering
+    triggers:
+      - trigger: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: KRAAN_LATER
+    actions:
+      - delay: "02:00:00"
+      - action: notify.mobile_app_<your_id_here>
+        data:
+          message: "⏰ Herinnering: heb je de buitenkraan afgesloten?"
+          data:
+            ttl: 0
+            priority: high
+            clickAction: "noAction"
+            tag: vorst_kraan
+    trace:
+      stored_traces: 10
+    mode: restart
+
+
+# 1 April (Kraan open herinnering + repeat)
+  - id: kraan_open_herinnering
+    alias: "1 april - kraan openzetten"
+    triggers:
+      - trigger: time
+        at: "08:00:00"
+    conditions:
+      - condition: template
+        value_template: "{{ now().month == 4 and now().day == 1 }}"
+    actions:
+      - action: notify.mobile_app_<your_id_here>
+        data:
+          title: "🌸 Voorjaar reminder"
+          message: "Heb je de buitenkraan weer opengezet?"
+          data:
+            ttl: 0
+            priority: high
+            clickAction: "noAction"
+            tag: kraan_open
+            actions:
+              - action: KRAAN_OPEN_JA
+                title: "JA"
+              - action: KRAAN_OPEN_LATER
+                title: "Herinner later"
+      - repeat:
+          while:
+            - condition: state
+              entity_id: input_boolean.water_afgesloten
+              state: "on"
+          sequence:
+            - delay: "02:00:00"
+            - action: notify.mobile_app_<your_id_here>
+              data:
+                title: "🌸 Reminder"
+                message: "Vergeet niet de buitenkraan weer open te zetten!"
+                data:
+                  ttl: 0
+                  priority: high
+                  clickAction: "noAction"
+                  tag: kraan_open
+                  actions:
+                    - action: KRAAN_OPEN_JA
+                      title: "JA"
+                    - action: KRAAN_OPEN_LATER
+                      title: "Herinner later"
+    trace:
+      stored_traces: 10
+    mode: restart
+
+
+# Kraan open (JA)
+  - id: 'kraan_open_bevestigd'
+    alias: Kraan open bevestigd
+    triggers:
+      - trigger: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: KRAAN_OPEN_JA
+    actions:
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.water_afgesloten
+      - action: notify.mobile_app_<your_id_here>
+        data:
+          message: "👍 Top! Buitenkraan is weer open."
+          data:
+            ttl: 0
+            priority: high
+            clickAction: "noAction"
+            tag: kraan_open
+    trace:
+      stored_traces: 10
+    mode: restart
+
+# Kraan open later
+  - id: 'kraan_open_later'
+    alias: Kraan open later
+    triggers:
+      - trigger: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: KRAAN_OPEN_LATER
+    actions:
+      - delay: "04:00:00"
+      - action: notify.mobile_app_<your_id_here>
+        data:
+          message: "⏰ Extra reminder: buitenkraan weer openzetten!"
+          data:
+            ttl: 0
+            priority: high
+            clickAction: "noAction"
+            tag: kraan_open
+    trace:
+      stored_traces: 10
+    mode: restart
+
+
+ Resultaat:
+   Vorst: dan melding en repeat
+   JA: dan stopt alles
+   NEE: dan waarschuwing
+   later: dan reminder
+   1 april: Kraan is open herinnering en repeat
+   JA: dan reset systeem
+
+
+ Realistische uitkomst op 5 april
+   Als je op 1 april: kraan weer open hebt gezet dan staat de helper = OFF
+ 
+   Als het op 5 april weer vriest: de automation zet de helper weer op ON
+   jij bevestigt het en de helper blijft ON
+
+ Kortom
+   Het systeem herstelt zichzelf automatisch bij nieuwe vorst, ook na 1 april.
+
+ Maar wat gebeurt als HA herstart midden in de repeat?
+   De repeat stopt volledig
+
+ Waarom:
+   Automations onthouden geen “lopende loops”
+   repeat + delay worden niet hervat na restart
+
+ Gevolg:
+ Na herstart:
+   vorst = nog steeds on
+   helper = nog steeds on
+   maar: geen nieuwe notificaties meer
+ totdat de:
+   temperatuur eerst weer boven de drempel gaat (off)
+   en daarna weer onder (on)
+
+################################################################################
+
+ Resultaat van tagging
+   je krijgt maar 1 actieve melding
+   nieuwe meldingen vervangen de oude
+   geen stapel notificaties
+   alles blijft netjes

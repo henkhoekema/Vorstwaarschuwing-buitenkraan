@@ -1,0 +1,18 @@
+   - binary_sensor:
+      - name: "Vorst risico"
+        unique_id: vorst_risico
+
+      # normale waarde → werkt zoals verwacht
+      # fout / unavailable → wordt 99
+      # dus → GEEN valse vorstmelding
+        state: >
+          {{ states('sensor.temperatuur') | float(99) < 8 }}         # Temperatuur lager als 8 graden?
+
+      # tegen flapperen
+        delay_on:
+          minutes: 5
+
+        delay_off:
+          minutes: 30
+
+
